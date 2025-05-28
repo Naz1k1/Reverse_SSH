@@ -49,37 +49,34 @@ setup_server() {
   systemctl restart sshd
 
   # 防火墙设置
-  read -p "设置隧道端口范围（如6000-6010）: " TUNNEL_PORTS
+  read -p "设置隧道端口（如6000）: " TUNNEL_PORT
   if grep -qi "ubuntu\|debian" /etc/os-release; then
     ufw allow $SSH_PORT/tcp
-    ufw allow $TUNNEL_PORTS/tcp
+    ufw allow $TUNNEL_PORT/tcp
     ufw --force enable
   else
     firewall-cmd --permanent --add-port=$SSH_PORT/tcp
-    firewall-cmd --permanent --add-port=$TUNNEL_PORTS/tcp
+    firewall-cmd --permanent --add-port=$TUNNEL_PORT/tcp
     firewall-cmd --reload
   fi
 
   # 创建监控脚本
   create_directory
-  cat > /usr/local/bin/tunnel_monitor.sh <<'EOF'
+  cat > /usr/local/bin/tunnel_monitor.sh <<EOF
 #!/bin/bash
-TUNNEL_PORTS=$(grep -oP 'ports=\K[0-9\-]+' /etc/tunnel.conf 2>/dev/null)
-for port in $(seq ${TUNNEL_PORTS%-*} ${TUNNEL_PORTS#*-}); do
-  if ! netstat -tln | grep -q ":$port "; then
-    echo "[$(date)] 端口 $port 无连接" >> /var/log/tunnel_status.log
-  fi
-done
+if ! netstat -tln | grep -q ":$TUNNEL_PORT "; then
+  echo "[$(date)] 端口 $TUNNEL_PORT 无连接" >> /var/log/tunnel_status.log
+fi
 EOF
   chmod +x /usr/local/bin/tunnel_monitor.sh
-  echo "ports=$TUNNEL_PORTS" > /etc/tunnel.conf
+  echo "port=$TUNNEL_PORT" > /etc/tunnel.conf
 
   # 添加定时任务
   (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/tunnel_monitor.sh") | crontab -
 
   echo -e "${GREEN}[√] 服务端配置完成${NC}"
   echo -e "SSH管理端口: ${YELLOW}$SSH_PORT${NC}"
-  echo -e "隧道端口范围: ${YELLOW}$TUNNEL_PORTS${NC}"
+  echo -e "隧道端口: ${YELLOW}$TUNNEL_PORT${NC}"
 }
 
 # 客户端配置
@@ -97,7 +94,10 @@ setup_client() {
   if [ ! -f ~/.ssh/id_rsa ]; then
     ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
   fi
-  ssh-copy-id -p $SERVER_PORT root@$SERVER_IP
+  if ! ssh-copy-id -p $SERVER_PORT root@$SERVER_IP; then
+    echo -e "${RED}错误：无法复制 SSH 密钥到服务器${NC}"
+    exit 1
+  fi
 
   # 创建systemd服务
   cat > /etc/systemd/system/ssh-tunnel.service <<EOF
