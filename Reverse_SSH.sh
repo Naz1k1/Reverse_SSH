@@ -8,17 +8,30 @@ NC='\033[0m'
 
 # 检查root权限
 check_root() {
-  [ "$(id -u)" -ne 0 ] && echo -e "${RED}错误：需要root权限执行${NC}" && exit 1
+  if [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}错误：需要root权限执行${NC}"
+    exit 1
+  fi
 }
 
 # 安装依赖
 install_deps() {
-  echo -e "${YELL+] 安装必要工具...${NC}"
+  echo -e "${YELLOW}安装必要工具...${NC}"
   if grep -qi "ubuntu\|debian" /etc/os-release; then
     apt-get update > /dev/null 2>&1
     apt-get install -y autossh net-tools ufw > /dev/null 2>&1
   elif grep -qi "centos\|rhel" /etc/os-release; then
     yum install -y autossh net-tools firewalld > /dev/null 2>&1
+  else
+    echo -e "${RED}不支持的操作系统${NC}"
+    exit 1
+  fi
+}
+
+# 创建必要的目录
+create_directory() {
+  if [ ! -d "/usr/local/bin" ]; then
+    mkdir -p /usr/local/bin
   fi
 }
 
@@ -26,7 +39,7 @@ install_deps() {
 setup_server() {
   clear
   echo -e "${GREEN}=== 云服务器配置 ===${NC}"
-  
+
   # 修改SSH端口
   read -p "设置SSH监听端口（默认2222）: " SSH_PORT
   SSH_PORT=${SSH_PORT:-2222}
@@ -48,6 +61,7 @@ setup_server() {
   fi
 
   # 创建监控脚本
+  create_directory
   cat > /usr/local/bin/tunnel_monitor.sh <<'EOF'
 #!/bin/bash
 TUNNEL_PORTS=$(grep -oP 'ports=\K[0-9\-]+' /etc/tunnel.conf 2>/dev/null)
@@ -62,7 +76,7 @@ EOF
 
   # 添加定时任务
   (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/tunnel_monitor.sh") | crontab -
-  
+
   echo -e "${GREEN}[√] 服务端配置完成${NC}"
   echo -e "SSH管理端口: ${YELLOW}$SSH_PORT${NC}"
   echo -e "隧道端口范围: ${YELLOW}$TUNNEL_PORTS${NC}"
@@ -72,7 +86,7 @@ EOF
 setup_client() {
   clear
   echo -e "${GREEN}=== 内网客户端配置 ===${NC}"
-  
+
   read -p "云服务器IP: " SERVER_IP
   read -p "云服务器SSH端口: " SERVER_PORT
   read -p "本地SSH端口（默认22）: " LOCAL_PORT
@@ -80,7 +94,9 @@ setup_client() {
   read -p "远程暴露端口（选服务端开放的端口）: " REMOTE_PORT
 
   # 密钥生成
-  [ ! -f ~/.ssh/id_rsa ] && ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
+  if [ ! -f ~/.ssh/id_rsa ]; then
+    ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
+  fi
   ssh-copy-id -p $SERVER_PORT root@$SERVER_IP
 
   # 创建systemd服务
@@ -123,6 +139,9 @@ manage_tunnel() {
       netstat -tulnp | grep ssh
       ;;
     logs)   journalctl -u ssh-tunnel -f ;;
+    *)
+      echo -e "${RED}无效操作${NC}"
+      ;;
   esac
 }
 
@@ -135,31 +154,32 @@ main_menu() {
   echo "3. 管理隧道连接"
   echo "4. 卸载所有配置"
   echo "5. 退出"
-  
-  read -p "请选择 [1-5]: " CHOICE
-  case $CHOICE in
-    1) setup_server ;;
-    2) setup_client ;;
-    3) 
-      echo -e "\n${YELLOW}管理选项:${NC}"
-      echo "a) 启动隧道"
-      echo "b) 停止隧道"
-      echo "c) 查看状态"
-      echo "d) 查看日志"
-      read -p "选择操作 [a-d]: " ACTION
-      case $ACTION in
-        a) manage_tunnel start ;;
-        b) manage_tunnel stop ;;
-        c) manage_tunnel status ;;
-        d) manage_tunnel logs ;;
-      esac
-      ;;
-    4) uninstall ;;
-    5) exit 0 ;;
-    *) echo -e "${RED}无效输入${NC}"; sleep 1 ;;
-  esac
-  read -p "按回车返回主菜单..."
-  main_menu
+
+  while true; do
+    read -p "请选择 [1-5]: " CHOICE
+    case $CHOICE in
+      1) setup_server ;;
+      2) setup_client ;;
+      3) 
+        echo -e "\n${YELLOW}管理选项:${NC}"
+        echo "a) 启动隧道"
+        echo "b) 停止隧道"
+        echo "c) 查看状态"
+        echo "d) 查看日志"
+        read -p "选择操作 [a-d]: " ACTION
+        case $ACTION in
+          a) manage_tunnel start ;;
+          b) manage_tunnel stop ;;
+          c) manage_tunnel status ;;
+          d) manage_tunnel logs ;;
+          *) echo -e "${RED}无效操作${NC}" ;;
+        esac
+        ;;
+      4) uninstall ;;
+      5) exit 0 ;;
+      *) echo -e "${RED}无效输入，请重新选择！${NC}" ;;
+    esac
+  done
 }
 
 # 卸载清理
@@ -169,6 +189,7 @@ uninstall() {
   systemctl daemon-reload
   sed -i '/GatewayPorts/d' /etc/ssh/sshd_config
   systemctl restart sshd
+  rm -f ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
   echo -e "${GREEN}[√] 已卸载所有配置${NC}"
 }
 
